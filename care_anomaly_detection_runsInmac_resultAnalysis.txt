@@ -1,0 +1,112 @@
+PERCENT MATCHED VS PAPER
+========================
+
+vs CARE (paper)
+---------------
+Metric   Ours      Paper     % of Paper   Delta vs Paper
+------   -------   -------   ----------   ---------------
+AP       0.6366    0.6563      97.0%      -3.0% shy
+AUC      0.8795    0.8656     101.6%      +1.6% better
+
+vs TAM (paper)
+--------------
+Metric   Ours      Paper     % of Paper
+------   -------   -------   ----------
+AP       0.6366    0.2634     241.7%
+AUC      0.8795    0.7064     124.5%
+
+Roll-up vs CARE (non-standard): simple average of AP% and AUC% ≈ 99.3%.
+
+
+ANALYSIS
+========
+
+Setup & metrics.
+----------------
+On Amazon, your final checkpoint at 12,500 epochs achieves AUPRC 0.6366 and
+AUROC 0.8795. Relative to the paper: CARE 0.6563±0.011 / 0.8656±0.002, TAM
+0.2634 / 0.7064. You exceed TAM by a wide margin on both metrics, exceed CARE
+on AUROC (+0.0139), and sit slightly below CARE on AUPRC (-0.0197).
+
+Training dynamics.
+------------------
+Both AP and AUC rise steadily, with a brief AP dip around 9,500 epochs (0.6185)
+followed by recovery to 0.6366. Post ~7.5k epochs, AUROC consistently surpasses
+CARE; AP continues improving but plateaus slowly after ~8k, indicating
+diminishing returns from further epochs without additional variance reduction
+(ensembling) or calibration.
+
+Interpretation.
+---------------
+- High AUROC vs slightly lower AP suggests good global separation between
+  normal/anomalous examples, but the top-of-list ordering (precision at early
+  recall) leaves small room for improvement. In imbalanced settings, AP is more
+  sensitive to how the highest scores are calibrated and combined than AUC.
+- The earlier fixes (positive-class AP computation; no row-normalization for
+  Amazon) aligned your pipeline with the paper and likely unlocked the observed
+  gains.
+- Variability across epochs hints at residual noise from single-cut/single-seed
+  training; the paper reports means over many cuts/runs, which typically lifts
+  AP by stabilizing the ranking in the “head” of the precision–recall curve.
+
+Limitations & threats to validity.
+----------------------------------
+- Results reflect a single run trajectory; lack of multi-seed statistics makes
+  direct comparison to the paper’s mean±std conservative.
+- Without explicit fusion across all cuts/seeds, your AP may understate the
+  achievable performance using the paper-style aggregation.
+- Calibration has not been applied; raw anomaly scores can be poorly scaled,
+  affecting ranking at the high-score tail that AP emphasizes.
+
+NEXT STEPS
+==========
+
+Primary (paper-aligned variance reduction & ranking improvements):
+------------------------------------------------------------------
+1) Fuse across cuts/seeds before reporting metrics (paper-style). Use rank
+   fusion or z-score fusion across 25 cuts per run; average over 3–5 seeds.
+   Typical gain on AP: +0.01 to +0.03, often enough to close the ~0.02 gap to
+   CARE while preserving your AUROC lead.
+2) Light calibration on the fused score (e.g., isotonic regression on a small
+   validation split). This sharpens the top of the ranking that AP depends on,
+   without architectural changes.
+
+Hyperparameters (small, targeted sweeps):
+-----------------------------------------
+3)  Clusters (K) sweep near the paper setting (e.g., K ∈ {10, 12, 14, 16}).
+    Pick the best K by validation AP; small changes in K can make the head of
+    the PR curve more confident.
+4)  Early stopping on validation AP (not loss). Keep the checkpoint with the
+    best AP to avoid late-epoch drift; use patience ~500–1,000 epochs.
+
+Reporting (for apples-to-apples with the paper):
+------------------------------------------------
+5)  Aggregate like the paper: report mean ± std over (seeds × 25 cuts) for AP
+    and AUC. Include 95% CIs (bootstrap) to quantify stability.
+6)  Curves & operating points: publish PR and ROC curves plus P@k (k=0.5%, 1%,
+    5%)—AP can hide useful improvements at practical cutoffs.
+
+Diagnostics & ablations:
+------------------------
+7)  Score distribution checks: plot per-cut score histograms and QQ plots;
+    ensure no single cut dominates the fusion (z-score or rank-normalize per
+    cut first).
+8)  Error analysis: inspect top false positives/negatives; look for cluster- or
+    attribute-level concentration to guide minor feature tweaks.
+9)  Monotone transforms only in fusion context: for a single model, monotone
+    re-scaling won’t change ranks/AP; but per-cut standardization before
+    averaging can materially improve the fused ranking.
+
+Compute & reproducibility:
+--------------------------
+10) Seed control & logs: fix seeds for all components, save per-cut raw scores,
+    and publish a small repro script that: (i) loads scores, (ii) fuses them,
+    (iii) computes AP/AUC and CIs.
+11) Hardware: if available, move to GPU to enable more seeds/cuts in the same
+    wall-clock budget, improving the confidence of your reported mean.
+
+Expected outcome.
+-----------------
+With (1) fusion and (2) light calibration, you should match or exceed CARE on
+AP while maintaining your AUROC lead—and you’ll be reporting results in the
+same statistical regime as the paper.
